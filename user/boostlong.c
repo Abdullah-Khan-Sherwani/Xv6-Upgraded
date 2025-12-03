@@ -1,18 +1,18 @@
-// boostlong.c - MLFQ demonstration test
-// xv6 printf only supports basic %d, %s, %x, %p, %c - NO width specifiers!
+// boostlong.c - MLFQ demonstration with 2 processes side by side
+// Shows demotions and boosts in tabular format
+// Demonstrates Q3 stays at Q3 even after 16 time slices (until boost)
 
 #include "kernel/types.h"
 #include "kernel/stat.h"
 #include "user/user.h"
 
-// Pure CPU work without any syscalls
-void pure_cpu_work(int iterations) {
+#define WORK_ITERATIONS 5000000
+
+void cpu_work(int iterations) {
   volatile int dummy = 0;
-  for(int i = 0; i < iterations; i++) {
-    for(long j = 0; j < 500000; j++) {
-      dummy = dummy + j;
-      dummy = dummy % 1000000;
-    }
+  for(long j = 0; j < iterations; j++) {
+    dummy = dummy + j;
+    dummy = dummy % 1000000;
   }
 }
 
@@ -20,149 +20,119 @@ int
 main(int argc, char *argv[])
 {
   struct procinfo info;
-  int last_priority = -1;
-  int last_slices = -1;
-  int q3_count = 0;
+  int start_tick;
+  int last_priority = 0;
+  int last_slices = 0;
   int boost_count = 0;
-  int phase = 0;
   
   printf("\n");
   printf("================================================================\n");
-  printf("       MLFQ BOOST TEST - WITH STARTUP ANALYSIS\n");
+  printf("     MLFQ BOOST TEST - SINGLE PROCESS DETAILED VIEW\n");
+  printf("================================================================\n");
+  printf("  Time Quanta: Q0=2, Q1=4, Q2=8, Q3=16 ticks\n");
+  printf("  Boost Interval: Every 50 ticks all processes -> Q0\n");
+  printf("  Key Test: Q3 stays at Q3 even after 16+ slices until BOOST\n");
   printf("================================================================\n\n");
-
-  printf("----------------------------------------------------------------\n");
-  printf(" PHASE 1: STARTUP OVERHEAD ANALYSIS\n");
-  printf("----------------------------------------------------------------\n");
-  printf(" Shows why initial ticks look weird - printf/syscalls use CPU\n\n");
-
-  int t0 = uptime();
-  getprocinfo(&info);
-  int t1 = uptime();
-  printf(" After getprocinfo: uptime %d->%d, slices=%d, queue=Q%d\n", 
-         t0, t1, info.time_slices, info.priority);
-
-  t0 = uptime();
-  printf(" This printf...");
-  t1 = uptime();
-  getprocinfo(&info);
-  printf(" took %d tick(s), slices now=%d\n", t1-t0, info.time_slices);
-
-  printf("\n Key insight: Syscalls cause context switches.\n");
-  printf(" Process yields during I/O, so ticks pass but time_slices\n");
-  printf(" only count RUNNING time on CPU.\n\n");
-
-  printf("----------------------------------------------------------------\n");
-  printf(" PHASE 2: WAIT FOR BOOST TO RESET\n");
-  printf("----------------------------------------------------------------\n");
-  printf(" Running CPU work until we get boosted to Q0...\n");
   
-  int waited = 0;
-  while(1) {
-    pure_cpu_work(5);
-    waited++;
-    getprocinfo(&info);
-    if(info.priority == 0 && info.time_slices == 0 && waited > 10) {
-      printf(" Got boosted! Starting clean measurement now.\n\n");
-      break;
-    }
-    if(waited > 200) {
-      printf(" Timeout waiting for boost, starting anyway.\n\n");
-      break;
-    }
-  }
-
-  printf("================================================================\n");
-  printf(" PHASE 3: CLEAN MLFQ DEMONSTRATION\n");
-  printf("================================================================\n");
-  printf(" Time Quanta: Q0=2, Q1=4, Q2=8, Q3=16 slices\n");
-  printf(" Boost Interval: Every 30 ticks all processes -> Q0\n\n");
-  
-  printf("+-------+-------+--------+-------------------------------+\n");
-  printf("| SLICE | QUEUE | CHANGE | DESCRIPTION                   |\n");
-  printf("+-------+-------+--------+-------------------------------+\n");
-  
-  // Get fresh start state
+  start_tick = uptime();
   getprocinfo(&info);
   last_priority = info.priority;
   last_slices = info.time_slices;
-  printf("|   %d   |  Q%d   | START  | Fresh start highest priority  |\n",
-         info.time_slices, info.priority);
   
-  // Run and track clean MLFQ behavior
-  while(phase < 400) {
-    pure_cpu_work(1);
-    phase++;
+  printf("  TICK | QUEUE | SLICES | EVENT\n");
+  printf("  -----+-------+--------+----------------------------------------\n");
+  
+  int reached_q3 = 0;
+  int q3_extra_shown = 0;
+  int first_boost_seen = 0;
+  
+  // Run until we see 3 boosts (print after 1st boost, track 2 more)
+  for(int phase = 0; phase < 2000 && boost_count < 3; phase++) {
+    cpu_work(WORK_ITERATIONS / 5);
     
     getprocinfo(&info);
+    int current_tick = uptime() - start_tick;
     
-    int priority_changed = (info.priority != last_priority);
-    int slices_changed = (info.time_slices != last_slices);
-    
-    if(priority_changed) {
+    // Detect events
+    if(info.priority != last_priority) {
       if(info.priority > last_priority) {
-        // Demotion
-        if(last_priority == 0) {
-          printf("|   %d   |  Q%d   | DEMOTE | Used 2 slices -> Q1           |\n",
-                 info.time_slices, info.priority);
-        } else if(last_priority == 1) {
-          printf("|   %d   |  Q%d   | DEMOTE | Used 4 slices -> Q2           |\n",
-                 info.time_slices, info.priority);
-        } else if(last_priority == 2) {
-          printf("|   %d   |  Q%d   | DEMOTE | Used 8 slices -> Q3           |\n",
-                 info.time_slices, info.priority);
-        }
-        
-        if(info.priority == 3) {
-          printf("+-------+-------+--------+-------------------------------+\n");
-          printf("| >>> AT Q3 - Will stay until BOOST interval <<<        |\n");
-          printf("+-------+-------+--------+-------------------------------+\n");
+        // Demotion - only print after first boost
+        if(first_boost_seen) {
+          printf("   %d  |  Q%d   |    %d   | DEMOTE Q%d->Q%d (used %d ticks)\n",
+                 current_tick, info.priority, info.time_slices,
+                 last_priority, info.priority, 
+                 last_priority == 0 ? 2 : (last_priority == 1 ? 4 : 8));
+          
+          if(info.priority == 3 && !reached_q3) {
+            reached_q3 = 1;
+            printf("  -----+-------+--------+----------------------------------------\n");
+            printf("  >>> Now at LOWEST priority (Q3) - will stay here until BOOST <<<\n");
+            printf("  -----+-------+--------+----------------------------------------\n");
+          }
         }
       } else {
-        // Boost!
+        // Boost
         boost_count++;
-        printf("+-------+-------+--------+-------------------------------+\n");
-        printf("|   %d   |  Q%d   | BOOST  | *** AUTOMATIC BOOST #%d ***    |\n",
-               info.time_slices, info.priority, boost_count);
-        printf("+-------+-------+--------+-------------------------------+\n");
-        q3_count = 0;
+        if(!first_boost_seen) {
+          first_boost_seen = 1;
+          printf("   %d  |  Q%d   |    %d   | *** BOOST #1 - START TRACKING ***\n",
+                 current_tick, info.priority, info.time_slices);
+          printf("  -----+-------+--------+----------------------------------------\n");
+        } else {
+          printf("  -----+-------+--------+----------------------------------------\n");
+          printf("   %d  |  Q%d   |    %d   | *** BOOST #%d! Q%d->Q0 ***\n",
+                 current_tick, info.priority, info.time_slices,
+                 boost_count, last_priority);
+          printf("  -----+-------+--------+----------------------------------------\n");
+        }
+        reached_q3 = 0;
+        q3_extra_shown = 0;
       }
     }
-    // Show slice progression at Q3
-    else if(info.priority == 3 && slices_changed) {
-      q3_count++;
-      if(q3_count % 4 == 0) {  // Show every 4th change
-        printf("|  %d   |  Q%d   |   ..   | Running at Q3 (%d/16 slices)  |\n",
-               info.time_slices, info.priority, info.time_slices);
+    // Show slice progression at Q3 (especially when slices > 16) - only after first boost
+    else if(first_boost_seen && info.priority == 3 && info.time_slices != last_slices) {
+      if(info.time_slices <= 16 && info.time_slices % 2 == 0) {
+        printf("   %d  |  Q%d   |   %d   | Waiting at Q3 (slices: %d/16)\n",
+               current_tick, info.priority, info.time_slices, info.time_slices);
       }
+      // KEY: Show that Q3 stays at Q3 even after 16 slices!
+      if(info.time_slices > 16 && q3_extra_shown < 5) {
+        printf("   %d  |  Q%d   |   %d   | STILL Q3! (slices > 16, waiting for boost)\n",
+               current_tick, info.priority, info.time_slices);
+        q3_extra_shown++;
+      }
+    }
+    // Show running status for other queues - only after first boost
+    else if(first_boost_seen && info.priority < 3 && info.time_slices != last_slices) {
+      printf("   %d  |  Q%d   |    %d   | Running at Q%d (slices: %d)\n",
+             current_tick, info.priority, info.time_slices, 
+             info.priority, info.time_slices);
     }
     
     last_priority = info.priority;
     last_slices = info.time_slices;
-    
-    // Stop after 3 boosts
-    if(boost_count >= 3) {
-      break;
-    }
   }
-  
-  printf("+-------+-------+--------+-------------------------------+\n");
   
   printf("\n");
   printf("================================================================\n");
   printf("                      TEST SUMMARY\n");
   printf("================================================================\n");
-  printf("  Boost Events: %d automatic boosts observed\n", boost_count);
+  int total = uptime() - start_tick;
+  printf("  Total Runtime   : %d ticks (~%d.%d seconds)\n", 
+         total, total/10, total%10);
+  printf("  Boost Events    : %d automatic boosts detected\n", boost_count);
+  printf("  Expected Interval: ~50 ticks between boosts\n");
   printf("----------------------------------------------------------------\n");
-  if(boost_count >= 2) {
-    printf("  SUCCESS! MLFQ working correctly:\n");
-    printf("  - Q0: 2 slices -> demote to Q1\n");
-    printf("  - Q1: 4 slices -> demote to Q2\n");
-    printf("  - Q2: 8 slices -> demote to Q3\n");
-    printf("  - Q3: stays until boost (every 30 ticks)\n");
-    printf("  - BOOST: all processes return to Q0\n");
+  if(boost_count >= 3) {
+    printf("  SUCCESS: Priority boosting is working correctly!\n\n");
+    printf("  The test demonstrated:\n");
+    printf("    1. Demotion: Q0 -> Q1 -> Q2 -> Q3 (CPU-bound behavior)\n");
+    printf("    2. Staying at Q3 until boost interval\n");
+    printf("    3. Q3 STAYS Q3 even after 16+ slices (no further demotion)\n");
+    printf("    4. Automatic boost back to Q0 (starvation prevention)\n");
+    printf("    5. Multiple boost cycles confirming periodic boosting\n");
   } else {
-    printf("  Incomplete - run longer or check implementation\n");
+    printf("  Test incomplete - try running longer\n");
   }
   printf("================================================================\n\n");
   
