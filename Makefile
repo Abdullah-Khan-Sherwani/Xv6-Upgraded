@@ -152,6 +152,7 @@ UPROGS=\
 	$U/_boost_t\
 	$U/_fairness_t\
 	$U/_starve_t\
+	$U/_boostlong\
 	
 fs.img: mkfs/mkfs README $(UPROGS)
 	mkfs/mkfs fs.img README $(UPROGS)
