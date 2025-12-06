@@ -66,35 +66,6 @@ mlfq_dequeue(int priority)
   return p;
 }
 
-// Remove a specific process from its queue (must hold mlfq_lock)
-// Used when a process is selected by another CPU or needs re-prioritization
-static void
-mlfq_remove(struct proc *p)
-{
-  int pri = p->priority;
-  struct proc *prev = 0;
-  struct proc *curr = mlfq_heads[pri];
-  
-  while(curr != 0) {
-    if(curr == p) {
-      if(prev == 0) {
-        // Removing head
-        mlfq_heads[pri] = curr->queue_next;
-      } else {
-        prev->queue_next = curr->queue_next;
-      }
-      if(mlfq_tails[pri] == p) {
-        // Removing tail
-        mlfq_tails[pri] = prev;
-      }
-      p->queue_next = 0;
-      return;
-    }
-    prev = curr;
-    curr = curr->queue_next;
-  }
-}
-
 extern void forkret(void);
 static void freeproc(struct proc *p);
 
