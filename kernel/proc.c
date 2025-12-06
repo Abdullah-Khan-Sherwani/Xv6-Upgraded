@@ -29,6 +29,8 @@ struct proc *mlfq_heads[NMLFQ];  // Head of each queue
 struct proc *mlfq_tails[NMLFQ];  // Tail of each queue
 struct spinlock mlfq_lock;
 
+
+
 // Enqueue a process to its priority queue (must hold mlfq_lock)
 static void
 mlfq_enqueue(struct proc *p)
