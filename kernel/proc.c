@@ -494,6 +494,19 @@ boost_all_priorities(void)
 {
   struct proc *p;
   
+  // First pass: Reset priorities for all active processes
+  // (acquire p->lock first to maintain lock ordering)
+  for(p = proc; p < &proc[NPROC]; p++) {
+    acquire(&p->lock);
+    if(p->state == RUNNABLE || p->state == RUNNING || p->state == SLEEPING) {
+      p->priority = 0;
+      p->time_slices = 0;
+      p->queue_next = 0;
+    }
+    release(&p->lock);
+  }
+  
+  // Second pass: Rebuild queues with only RUNNABLE processes
   acquire(&mlfq_lock);
   
   // Clear all queues
@@ -502,18 +515,12 @@ boost_all_priorities(void)
     mlfq_tails[i] = 0;
   }
   
-  // Boost all processes and re-enqueue RUNNABLE ones to queue 0
+  // Re-enqueue all RUNNABLE processes to queue 0
   for(p = proc; p < &proc[NPROC]; p++) {
     acquire(&p->lock);
-    if(p->state == RUNNABLE || p->state == RUNNING || p->state == SLEEPING) {
-      p->priority = 0;
-      p->time_slices = 0;
+    if(p->state == RUNNABLE) {
       p->queue_next = 0;
-      
-      // Only enqueue RUNNABLE processes
-      if(p->state == RUNNABLE) {
-        mlfq_enqueue(p);
-      }
+      mlfq_enqueue(p);
     }
     release(&p->lock);
   }
